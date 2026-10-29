@@ -48,6 +48,8 @@ jobs:
         with:
           languages: python
       - uses: github/codeql-action/analyze@v3
+        with:
+          upload: false
 
   # ---------- 3. validate IaC + scan configs (Terraform, K8s, Dockerfile) ----------
   iac-validate:
