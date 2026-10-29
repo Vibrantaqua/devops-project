@@ -1,0 +1,160 @@
+name: CI-CD
+
+on:
+  push:
+    branches: [main, dev]
+  pull_request:
+    branches: [main, dev]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  # ---------- 1. build + unit tests + static analysis + artifact ----------
+  lint-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install -r requirements-dev.txt
+      - name: Static analysis (flake8)
+        run: flake8 .
+      - name: Unit tests with coverage
+        run: pytest --cov=app --cov-report=xml --cov-report=term --junitxml=junit.xml
+      - name: Package build artifact
+        run: tar czf "snake-game-${GITHUB_SHA::7}.tgz" app requirements.txt Dockerfile
+      - uses: actions/upload-artifact@v4
+        with:
+          name: build-artifacts
+          path: |
+            snake-game-*.tgz
+            coverage.xml
+            junit.xml
+
+  # ---------- 2. security: CodeQL SAST ----------
+  codeql:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read
+      security-events: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: github/codeql-action/init@v3
+        with:
+          languages: python
+      - uses: github/codeql-action/analyze@v3
+
+  # ---------- 3. validate IaC + scan configs (Terraform, K8s, Dockerfile) ----------
+  iac-validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+      - name: Terraform fmt + validate
+        working-directory: terraform
+        run: |
+          terraform fmt -check -recursive
+          terraform init -backend=false
+          terraform validate
+      - name: Trivy misconfiguration scan (report)
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          scan-type: config
+          scan-ref: .
+          format: table
+          severity: HIGH,CRITICAL
+          exit-code: "0"
+
+  # ---------- 4. container: build, scan, push ----------
+  build-scan-push:
+    needs: [lint-test, iac-validate]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Build image (local, for scanning)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          load: true
+          tags: snake-game:scan
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Trivy vulnerability scan
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          image-ref: snake-game:scan
+          format: table
+          severity: CRITICAL
+          ignore-unfixed: true
+          exit-code: "1"
+
+      - name: Log in to GHCR
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Image tags
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ github.repository }}
+          tags: |
+            type=sha
+            type=raw,value=latest,enable={{is_default_branch}}
+
+      - name: Push image
+        if: github.event_name != 'pull_request'
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+
+  # ---------- 5. deploy to Kubernetes (kind in the runner) + rolling update ----------
+  deploy-kubernetes:
+    needs: build-scan-push
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: helm/kind-action@v1
+        with:
+          cluster_name: snake
+      - name: Build image and load into kind
+        run: |
+          docker build -t snake-game:1.0 .
+          kind load docker-image snake-game:1.0 --name snake
+      - name: Deploy
+        run: |
+          kubectl apply -f k8s/namespace.yaml
+          kubectl -n snake-game create secret generic app-secret \
+            --from-literal=APP_SECRET_KEY="$(openssl rand -hex 16)"
+          kubectl apply -f k8s/deployment.yaml -f k8s/service.yaml -f k8s/hpa.yaml
+          kubectl -n snake-game rollout status deploy/snake-game --timeout=120s
+      - name: Rolling update to v1.1
+        run: |
+          docker tag snake-game:1.0 snake-game:1.1
+          kind load docker-image snake-game:1.1 --name snake
+          kubectl -n snake-game set image deploy/snake-game app=snake-game:1.1
+          kubectl -n snake-game rollout status deploy/snake-game --timeout=120s
+          kubectl -n snake-game get pods,svc,hpa
+      - name: Smoke test
+        run: |
+          kubectl -n snake-game port-forward svc/snake-game 8080:80 &
+          sleep 5
+          curl -fsS http://127.0.0.1:8080/health

@@ -1,0 +1,23 @@
+#!/bin/bash
+# Runs once at first boot (cloud-init). Log: /var/log/cloud-init-output.log
+set -euxo pipefail
+export DEBIAN_FRONTEND=noninteractive
+
+apt-get update -y
+apt-get install -y ca-certificates curl git
+curl -fsSL https://get.docker.com | sh
+usermod -aG docker ubuntu
+
+git clone --depth 1 --branch ${repo_branch} ${repo_url} /opt/snake-game
+cd /opt/snake-game
+
+cat > .env <<ENV
+APP_IMAGE=${app_image}
+APP_SECRET_KEY=${app_secret}
+GRAFANA_PASSWORD=${grafana_pw}
+ENV
+chmod 600 .env
+
+# Pull the CI-built image; if it is not published yet, compose builds it locally
+docker compose pull app || true
+docker compose up -d

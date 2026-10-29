@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Snake</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <main>
+    <h1>Snake</h1>
+    <p class="hud">Score: <span id="score">0</span></p>
+    <canvas id="board" width="400" height="400"></canvas>
+
+    <div class="pad" aria-label="touch controls">
+      <button data-dir="up">&uarr;</button>
+      <div>
+        <button data-dir="left">&larr;</button>
+        <button data-dir="down">&darr;</button>
+        <button data-dir="right">&rarr;</button>
+      </div>
+    </div>
+    <button id="start" class="primary">Start / Restart</button>
+
+    <section id="gameover" hidden>
+      <p>Game over! Score: <strong id="final">0</strong></p>
+      <input id="name" maxlength="12" placeholder="Your name" autocomplete="off">
+      <button id="submit">Save score</button>
+      <p id="msg" role="status"></p>
+    </section>
+
+    <section>
+      <h2>Top 10</h2>
+      <ol id="scores"></ol>
+    </section>
+    <p class="hint">Arrow keys or WASD to move.</p>
+  </main>
+  <script src="/static/game.js"></script>
+</body>
+</html>

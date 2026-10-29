@@ -1,0 +1,13 @@
+__pycache__/
+*.pyc
+.venv/
+.coverage
+coverage.xml
+junit.xml
+.pytest_cache/
+# terraform
+terraform/.terraform/
+terraform/*.tfstate*
+terraform/*.tfvars
+!terraform/terraform.tfvars.example
+*.retry
